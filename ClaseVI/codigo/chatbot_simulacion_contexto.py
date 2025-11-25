@@ -140,7 +140,7 @@ def generate_response(input_text):
         # El modelo LLaMA procesará toda la conversación para generar contexto
         chat_completion = client.chat.completions.create(
             messages=messages_for_api,           # Todo el historial de conversación
-            model="llama3-8b-8192",             # Modelo Llama 3 con contexto de 8192 tokens
+            model=MODEL_ID,                      # Modelo seleccionado en la barra lateral
             temperature=0.7,                    # Controla la creatividad (0=determinista, 1=creativo)
             max_tokens=1000,                    # Máximo de tokens en la respuesta
             top_p=0.9,                         # Control de diversidad en la generación
@@ -193,12 +193,20 @@ st.markdown("""
 
 # Información del modelo en la barra lateral
 st.sidebar.markdown("### 🧠 Configuración del Modelo")
-st.sidebar.info("""
-**Modelo**: Llama 3 (8B parámetros)
-**Contexto**: 8,192 tokens
-**Temperature**: 0.7 (equilibrado)
-**Max Tokens**: 1,000
-""")
+MODEL_ID = st.sidebar.selectbox(
+    "Modelo de lenguaje",
+    options=[
+        "llama-3.1-8b-instant",   # Reemplazo recomendado para 8B
+        "llama-3.3-70b-versatile" # Reemplazo recomendado para 70B
+    ],
+    index=0,
+    help="Modelos recomendados por Groq (no deprecados)."
+)
+_model_info = {
+    "llama-3.1-8b-instant": "🦙 Llama 3.1 8B Instant: excelente precio-rendimiento y baja latencia",
+    "llama-3.3-70b-versatile": "🦙 Llama 3.3 70B Versatile: mayor calidad general",
+}
+st.sidebar.info(_model_info.get(MODEL_ID, "Modelo seleccionado"))
 
 # ========================================
 # INTERFAZ DE ENTRADA DEL USUARIO

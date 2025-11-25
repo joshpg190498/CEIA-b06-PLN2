@@ -37,17 +37,16 @@ import random                   # Para funcionalidades aleatorias (si se necesit
 import os                      # Para acceso a variables de entorno
 
 # Importaciones específicas de LangChain para gestión de conversaciones
-from langchain.chains import ConversationChain, LLMChain
+
 from langchain_core.prompts import (
     ChatPromptTemplate,           # Template para estructurar mensajes de chat
     HumanMessagePromptTemplate,   # Template específico para mensajes humanos
     MessagesPlaceholder,          # Marcador de posición para el historial
 )
 from langchain_core.messages import SystemMessage  # Mensajes del sistema
-from langchain.chains.conversation.memory import ConversationBufferWindowMemory  # Memoria de ventana deslizante
 from langchain_groq import ChatGroq              # Integración LangChain-Groq
-from langchain.prompts import PromptTemplate     # Templates de prompts
-
+from langchain_core.runnables import RunnableWithMessageHistory
+from langchain_core.chat_history import InMemoryChatMessageHistory
 
 def main():
     """
@@ -118,18 +117,16 @@ def main():
     model = st.sidebar.selectbox(
         'Elige un modelo:',
         [
-            'llama3-8b-8192',      # Llama 3 - 8B parámetros, contexto de 8192 tokens
-            'mixtral-8x7b-32768',  # Mixtral - Modelo de mezcla de expertos
-            'gemma-7b-it'          # Gemma - Modelo de Google optimizado para instrucciones
+            'llama-3.1-8b-instant',   # Reemplazo recomendado para 8B
+            'llama-3.3-70b-versatile' # Reemplazo recomendado para 70B
         ],
         help="Diferentes modelos tienen distintas capacidades y velocidades"
     )
     
     # Información sobre el modelo seleccionado
     model_info = {
-        'llama3-8b-8192': "🦙 Llama 3: Equilibrio entre velocidad y calidad",
-        'mixtral-8x7b-32768': "🔀 Mixtral: Modelo de expertos, excelente para tareas complejas",
-        'gemma-7b-it': "💎 Gemma: Optimizado para seguir instrucciones"
+        'llama-3.1-8b-instant': "🦙 Llama 3.1 8B Instant: excelente precio-rendimiento y baja latencia",
+        'llama-3.3-70b-versatile': "🦙 Llama 3.3 70B Versatile: mayor calidad general"
     }
     st.sidebar.info(model_info.get(model, "Modelo seleccionado"))
     
@@ -150,13 +147,11 @@ def main():
     # CONFIGURACIÓN DE LA MEMORIA CONVERSACIONAL
     # ========================================
     
-    # Crear objeto de memoria con ventana deslizante
-    # ConversationBufferWindowMemory mantiene solo los últimos k intercambios
-    memory = ConversationBufferWindowMemory(
-        k=conversational_memory_length,        # Número de intercambios a recordar
-        memory_key="historial_chat",           # Clave para acceder al historial
-        return_messages=True                   # Devolver mensajes en formato estructurado
-    )
+    # Nueva API: gestionamos historial con RunnableWithMessageHistory + InMemoryChatMessageHistory
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = "default"
+    if "history_store" not in st.session_state:
+        st.session_state.history_store = {}
     
     # ========================================
     # GESTIÓN DEL HISTORIAL DE CONVERSACIÓN
@@ -168,19 +163,16 @@ def main():
         st.session_state.historial_chat = []
         st.sidebar.success("💬 Nueva conversación iniciada")
     else:
-        # Si ya existe historial, cargarlo en la memoria de LangChain
-        for message in st.session_state.historial_chat:
-            memory.save_context(
-                {'input': message['humano']},      # Mensaje del usuario
-                {'output': message['IA']}          # Respuesta del chatbot
-            )
-        
         # Mostrar información del historial en la barra lateral
         st.sidebar.info(f"💬 Conversación con {len(st.session_state.historial_chat)} mensajes")
     
     # Botón para limpiar el historial
     if st.sidebar.button("🗑️ Limpiar Conversación"):
         st.session_state.historial_chat = []
+        # Reiniciar historial de LangChain para la sesión actual
+        sid = st.session_state.session_id
+        if sid in st.session_state.history_store:
+            st.session_state.history_store[sid] = InMemoryChatMessageHistory()
         st.sidebar.success("✅ Conversación limpiada")
         st.rerun()  # Recargar la aplicación
     
@@ -249,12 +241,21 @@ def main():
                 # CREACIÓN DE LA CADENA DE CONVERSACIÓN
                 # ========================================
                 
-                # LLMChain conecta el modelo de lenguaje con el template y la memoria
-                conversation = LLMChain(
-                    llm=groq_chat,          # El modelo de lenguaje configurado
-                    prompt=prompt,          # El template de conversación
-                    verbose=False,          # Desactivar logs detallados para producción
-                    memory=memory,          # La memoria conversacional
+                # Nueva composición: Prompt → Modelo
+                chain = prompt | groq_chat
+                
+                # Obtener/crear historial de la sesión actual
+                session_id = st.session_state.session_id
+                store = st.session_state.history_store
+                if session_id not in store:
+                    store[session_id] = InMemoryChatMessageHistory()
+                
+                # Envolver con memoria conversacional usando la nueva API
+                chain_with_memory = RunnableWithMessageHistory(
+                    chain,
+                    lambda sid: store.setdefault(sid, InMemoryChatMessageHistory()),
+                    input_messages_key="human_input",
+                    history_messages_key="historial_chat",
                 )
                 
                 # ========================================
@@ -262,7 +263,11 @@ def main():
                 # ========================================
                 
                 # Enviar la pregunta al modelo y obtener la respuesta
-                response = conversation.predict(human_input=user_question)
+                result = chain_with_memory.invoke(
+                    {"human_input": user_question},
+                    config={"configurable": {"session_id": session_id}},
+                )
+                response = getattr(result, "content", result)
                 
                 # ========================================
                 # ALMACENAMIENTO Y VISUALIZACIÓN
